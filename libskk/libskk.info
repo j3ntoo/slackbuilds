@@ -1,0 +1,8 @@
+PRGNAM="libskk"
+VERSION="1.0.5"
+HOMEPAGE="https://github.com/ueno/libskk"
+DOWNLOAD="https://github.com/ueno/libskk/releases/download/1.0.5/libskk-1.0.5.tar.xz"
+MD5SUM="683c5a2dd23171297132453afd62e3c4"
+REQUIRES="libgee1 gnome-common"
+MAINTAINER="atuow"
+EMAIL="atuow@xiun.org"
