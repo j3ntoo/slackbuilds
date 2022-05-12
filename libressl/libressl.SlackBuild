@@ -22,61 +22,30 @@
 #  OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 #  ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-# |-----------------------------------------------------------------| #
-# REMOVE THIS ENTIRE BLOCK OF TEXT #
-#
-# A license is required, and we strongly suggest you use the above
-# BSD/MIT style license. We DO NOT accept "Public Domain" scripts.
-# Public domain is not valid in some countries, and no license is
-# worse than a "bad" license in those countries.
-#
-# This template is not meant to be a 'cut and paste' script to
-# enable any random user to make a working package.  While
-# we're certainly not discouraging use of this template, if
-# you haven't manually gone through each step of the process
-# without the build script (typically as a normal user, as this
-# will reveal problems that you won't see as root), then there's
-# a good chance that something important is missing from your
-# submission.
-
-# When using this template script, please remove as many of
-# these unnecessary comments as possible.  Commented code is
-# a good thing, but if it's obvious, there's no need to comment it.
-#
-# AGAIN, REMOVE THE COMMENTS IF THEY ARE NOT NEEDED - DON'T JUST
-# DELETE THIS BLOCK OF TEXT WITHOUT BOTHERING TO READ WHAT'S IN IT.
-#
-# |-----------------------------------------------------------------| #
-
 cd $(dirname $0) ; CWD=$(pwd)
 
 PRGNAM=libressl
 VERSION=${VERSION:-3.5.2}
-BUILD=${BUILD:-2}
+BUILD=${BUILD:-3}
 TAG=${TAG:-_mySBo}
 PKGTYPE=${PKGTYPE:-txz}
 
-# Automatically determine the architecture we're building on:
 if [ -z "$ARCH" ]; then
   case "$( uname -m )" in
     i?86) ARCH=i586 ;;
     arm*) ARCH=arm ;;
-# Unless $ARCH is already set, use uname -m for all other archs:
        *) ARCH=$( uname -m ) ;;
   esac
 fi
 
-# If the variable PRINT_PACKAGE_NAME is set, then this script will report what
-# the name of the created package would be, and then exit. This information
-# could be useful to other scripts.
 if [ ! -z "${PRINT_PACKAGE_NAME}" ]; then
   echo "$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE"
   exit 0
 fi
 
-TMP=${TMP:-/tmp/SBo}		# For consistency's sake, use this
+TMP=${TMP:-/tmp/SBo}
 PKG=$TMP/package-$PRGNAM
-OUTPUT=${OUTPUT:-/tmp}		# Drop the package in /tmp
+OUTPUT=${OUTPUT:-/tmp}
 
 if [ "$ARCH" = "i586" ]; then
   SLKCFLAGS="-O2 -march=i586 -mtune=i686"
@@ -85,7 +54,7 @@ elif [ "$ARCH" = "i686" ]; then
   SLKCFLAGS="-O2 -march=i686 -mtune=i686"
   LIBDIRSUFFIX=""
 elif [ "$ARCH" = "x86_64" ]; then
-  SLKCFLAGS="-O2 -march=native -fPIC -static"
+  SLKCFLAGS="-O2 -march=native -fPIC"
   LIBDIRSUFFIX="64"
 else
   SLKCFLAGS="-O2"
@@ -107,33 +76,42 @@ find -L . \
  \( -perm 666 -o -perm 664 -o -perm 640 -o -perm 600 -o -perm 444 \
   -o -perm 440 -o -perm 400 \) -exec chmod 644 {} \;
 
-# Your application will probably need different cmake flags; these are only
-# examples.  You might use 'ccmake' to see the available flags...
-mkdir -p build
-cd build
+INSTROOT=/opt/libressl
+
+mkdir -p build-musl
+cd build-musl
   cmake \
     -G Ninja \
     -DCMAKE_C_COMPILER:STRING=/usr/bin/musl-gcc \
     -DCMAKE_C_FLAGS:STRING="$SLKCFLAGS" \
-    -DCMAKE_INSTALL_PREFIX=/usr/local \
-    -DCMAKE_INSTALL_MANDIR=/usr/local/man \
+    -DCMAKE_INSTALL_PREFIX=$INSTROOT/musl \
+    -DCMAKE_INSTALL_DATAROOTDIR=$INSTROOT \
+    -DCMAKE_INSTALL_INCLUDEDIR=$INSTROOT/include \
     -DCMAKE_BUILD_TYPE=Release ..
   ninja
   DESTDIR=$PKG ninja install/strip
 cd ..
 
-# Don't ship .la files:
-rm -f $PKG/{,usr/}lib${LIBDIRSUFFIX}/*.la
+mv $PKG/$INSTROOT/musl/etc $PKG/$INSTROOT
 
-# Compress man pages
-# If the man pages are installed to /usr/share/man instead, you'll need to 
-# move them manually.
-find $PKG/usr/local/man -type f -exec gzip -9 {} \;
-for i in $( find $PKG/usr/local/man -type l ) ; do ln -s $( readlink $i ).gz $i.gz ; rm $i ; done
+mkdir -p build-gnu
+cd build-gnu
+  cmake \
+    -G Ninja \
+    -DCMAKE_C_COMPILER:STRING=gcc \
+    -DCMAKE_C_FLAGS:STRING="$SLKCFLAGS" \
+    -DCMAKE_INSTALL_PREFIX=$INSTROOT/gnu \
+    -DCMAKE_INSTALL_DATAROOTDIR=$INSTROOT \
+    -DCMAKE_INSTALL_INCLUDEDIR=$INSTROOT/include \
+    -DCMAKE_BUILD_TYPE=Release ..
+  ninja
+  DESTDIR=$PKG ninja install/strip
+cd ..
 
-# Make the package; be sure to leave it in $OUTPUT
-# If package symlinks need to be created during install *before*
-# your custom contents of doinst.sh runs, then add the -p switch to
-# the makepkg command below -- see makepkg(8) for details
+rm -rf $PKG/$INSTROOT/gnu/etc
+
+find $PKG/opt/libressl/man -type f -exec gzip -9 {} \;
+for i in $( find $PKG/opt/libressl/man -type l ) ; do ln -s $( readlink $i ).gz $i.gz ; rm $i ; done
+
 cd $PKG
 /sbin/makepkg -l y -c n $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
