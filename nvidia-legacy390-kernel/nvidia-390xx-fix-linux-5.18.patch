@@ -1,0 +1,222 @@
+diff --git a/common/inc/nv-linux.h b/common/inc/nv-linux.h
+index 9a656bf..2a469ab 100644
+--- a/common/inc/nv-linux.h
++++ b/common/inc/nv-linux.h
+@@ -340,7 +340,7 @@ extern int nv_pat_mode;
+ #if defined(NV_PCI_DMA_MAPPING_ERROR_PRESENT)
+ #if (NV_PCI_DMA_MAPPING_ERROR_ARGUMENT_COUNT == 2)
+ #define NV_PCI_DMA_MAPPING_ERROR(dev, addr) \
+-    pci_dma_mapping_error(dev, addr)
++    dma_mapping_error(dev, addr)
+ #elif (NV_PCI_DMA_MAPPING_ERROR_ARGUMENT_COUNT == 1)
+ #define NV_PCI_DMA_MAPPING_ERROR(dev, addr) \
+     pci_dma_mapping_error(addr)
+diff --git a/nvidia-drm/nvidia-drm-gem.c b/nvidia-drm/nvidia-drm-gem.c
+index 7c92445..59656b2 100644
+--- a/nvidia-drm/nvidia-drm-gem.c
++++ b/nvidia-drm/nvidia-drm-gem.c
+@@ -54,7 +54,7 @@ void nv_drm_gem_free(struct drm_gem_object *gem)
+ #if !defined(NV_DRM_DRIVER_HAS_GEM_PRIME_CALLBACKS) && \
+     defined(NV_DRM_GEM_OBJECT_VMAP_HAS_MAP_ARG)
+ static int nv_drm_gem_vmap(struct drm_gem_object *gem,
+-                           struct dma_buf_map *map)
++                           struct iosys_map *map)
+ {
+     map->vaddr = nv_drm_gem_prime_vmap(gem);
+     if (map->vaddr == NULL) {
+@@ -65,7 +65,7 @@ static int nv_drm_gem_vmap(struct drm_gem_object *gem,
+ }
+ 
+ static void nv_drm_gem_vunmap(struct drm_gem_object *gem,
+-                              struct dma_buf_map *map)
++                              struct iosys_map *map)
+ {
+     nv_drm_gem_prime_vunmap(gem, map->vaddr);
+     map->vaddr = NULL;
+diff --git a/nvidia-uvm/uvm8_gpu.c b/nvidia-uvm/uvm8_gpu.c
+index 10e3864..130aa9e 100644
+--- a/nvidia-uvm/uvm8_gpu.c
++++ b/nvidia-uvm/uvm8_gpu.c
+@@ -2214,15 +2214,15 @@ void uvm_processor_uuid_from_id(NvProcessorUuid *uuid, uvm_processor_id_t id)
+ 
+ NV_STATUS uvm_gpu_map_cpu_pages(uvm_gpu_t *gpu, struct page *page, size_t size, NvU64 *dma_addr_out)
+ {
+-    NvU64 dma_addr = pci_map_page(gpu->pci_dev, page, 0, size, PCI_DMA_BIDIRECTIONAL);
++    NvU64 dma_addr = dma_map_page(&gpu->pci_dev->dev, page, 0, size, DMA_BIDIRECTIONAL);
+ 
+     UVM_ASSERT(PAGE_ALIGNED(size));
+ 
+-    if (NV_PCI_DMA_MAPPING_ERROR(gpu->pci_dev, dma_addr))
++    if (NV_PCI_DMA_MAPPING_ERROR(&gpu->pci_dev->dev, dma_addr))
+         return NV_ERR_OPERATING_SYSTEM;
+ 
+     if (dma_addr < gpu->dma_addressable_start || dma_addr + size - 1 > gpu->dma_addressable_limit) {
+-        pci_unmap_page(gpu->pci_dev, dma_addr, size, PCI_DMA_BIDIRECTIONAL);
++        dma_unmap_page(&gpu->pci_dev->dev, dma_addr, size, DMA_BIDIRECTIONAL);
+         UVM_ERR_PRINT_RL("PCI mapped range [0x%llx, 0x%llx) not in the addressable range [0x%llx, 0x%llx), GPU %s\n",
+                          dma_addr,
+                          dma_addr + (NvU64)size,
+@@ -2256,7 +2256,7 @@ void uvm_gpu_unmap_cpu_pages(uvm_gpu_t *gpu, NvU64 dma_address, size_t size)
+     if (gpu->npu_dev)
+         dma_address = nv_expand_nvlink_addr(dma_address);
+     dma_address += gpu->dma_addressable_start;
+-    pci_unmap_page(gpu->pci_dev, dma_address, size, PCI_DMA_BIDIRECTIONAL);
++    dma_unmap_page(&gpu->pci_dev->dev, dma_address, size, DMA_BIDIRECTIONAL);
+     atomic64_sub(size, &gpu->mapped_cpu_pages_size);
+ }
+ 
+diff --git a/nvidia/nv-acpi.c b/nvidia/nv-acpi.c
+index 1907521..7686103 100644
+--- a/nvidia/nv-acpi.c
++++ b/nvidia/nv-acpi.c
+@@ -590,7 +590,6 @@ void NV_API_CALL nv_acpi_methods_init(NvU32 *handlesPresent)
+ {
+     struct acpi_device *device = NULL;
+     NV_STATUS rmStatus;
+-    int retVal = -1;
+ 
+ 
+     if (!handlesPresent) // Caller passed us invalid pointer.
+@@ -610,9 +609,9 @@ void NV_API_CALL nv_acpi_methods_init(NvU32 *handlesPresent)
+             if (!nvif_parent_gpu_handle) /* unknown error */
+                 break;
+             
+-            retVal = acpi_bus_get_device(nvif_parent_gpu_handle, &device);
++            device = acpi_fetch_acpi_dev(nvif_parent_gpu_handle);
+ 
+-            if (ACPI_FAILURE(retVal) || !device)
++            if (!device)
+                 break;
+ 
+             if (device->driver_data)
+@@ -684,7 +683,7 @@ void NV_API_CALL nv_acpi_methods_uninit(void)
+     if (nvif_parent_gpu_handle == NULL) 
+         return;
+ 
+-    acpi_bus_get_device(nvif_parent_gpu_handle, &device);
++    device = acpi_fetch_acpi_dev(nvif_parent_gpu_handle);
+ 
+     nv_uninstall_notifier(device, nv_acpi_event);
+     nvif_parent_gpu_handle = NULL;
+@@ -1244,9 +1243,9 @@ NV_STATUS NV_API_CALL nv_acpi_ddc_method(
+     if (!dev_handle)
+         return NV_ERR_INVALID_ARGUMENT;
+ 
+-    status = acpi_bus_get_device(dev_handle, &device);
++    device = acpi_fetch_acpi_dev(dev_handle);
+ 
+-    if (ACPI_FAILURE(status) || !device)
++    if (!device)
+         return NV_ERR_INVALID_ARGUMENT;
+ 
+     if (!NV_MAY_SLEEP())
+diff --git a/nvidia/nv-dma.c b/nvidia/nv-dma.c
+index 858d094..0fcca1a 100644
+--- a/nvidia/nv-dma.c
++++ b/nvidia/nv-dma.c
+@@ -27,9 +27,9 @@ static NV_STATUS nv_dma_map_contig(
+     NvU64 *va
+ )
+ {
+-    *va = pci_map_page(dma_map->dev, dma_map->pages[0], 0,
+-            dma_map->page_count * PAGE_SIZE, PCI_DMA_BIDIRECTIONAL);
+-    if (NV_PCI_DMA_MAPPING_ERROR(dma_map->dev, *va))
++    *va = dma_map_page(&dma_map->dev->dev, dma_map->pages[0], 0,
++            dma_map->page_count * PAGE_SIZE, DMA_BIDIRECTIONAL);
++    if (NV_PCI_DMA_MAPPING_ERROR(&dma_map->dev->dev, *va))
+     {
+         return NV_ERR_OPERATING_SYSTEM;
+     }
+@@ -57,8 +57,8 @@ static NV_STATUS nv_dma_map_contig(
+ 
+ static void nv_dma_unmap_contig(nv_dma_map_t *dma_map)
+ {
+-    pci_unmap_page(dma_map->dev, dma_map->mapping.contig.dma_addr,
+-            dma_map->page_count * PAGE_SIZE, PCI_DMA_BIDIRECTIONAL);
++    dma_unmap_page(&dma_map->dev->dev, dma_map->mapping.contig.dma_addr,
++            dma_map->page_count * PAGE_SIZE, DMA_BIDIRECTIONAL);
+ }
+ 
+ static void nv_fill_scatterlist
+@@ -166,10 +166,10 @@ NV_STATUS nv_map_dma_map_scatterlist(nv_dma_map_t *dma_map)
+ 
+     NV_FOR_EACH_DMA_SUBMAP(dma_map, submap, i)
+     {
+-        submap->sg_map_count = pci_map_sg(dma_map->dev,
++        submap->sg_map_count = dma_map_sg(&dma_map->dev->dev,
+                 NV_DMA_SUBMAP_SCATTERLIST(submap),
+                 NV_DMA_SUBMAP_SCATTERLIST_LENGTH(submap),
+-                PCI_DMA_BIDIRECTIONAL);
++                DMA_BIDIRECTIONAL);
+         if (submap->sg_map_count == 0)
+         {
+             status = NV_ERR_OPERATING_SYSTEM;
+@@ -197,9 +197,9 @@ void nv_unmap_dma_map_scatterlist(nv_dma_map_t *dma_map)
+             break;
+         }
+ 
+-        pci_unmap_sg(dma_map->dev, NV_DMA_SUBMAP_SCATTERLIST(submap),
++        dma_unmap_sg(&dma_map->dev->dev, NV_DMA_SUBMAP_SCATTERLIST(submap),
+                 NV_DMA_SUBMAP_SCATTERLIST_LENGTH(submap),
+-                PCI_DMA_BIDIRECTIONAL);
++                DMA_BIDIRECTIONAL);
+     }
+ }
+ 
+diff --git a/nvidia/nv.c b/nvidia/nv.c
+index 9b80524..5552dba 100644
+--- a/nvidia/nv.c
++++ b/nvidia/nv.c
+@@ -9,6 +9,7 @@
+  */
+ 
+ #include "nv-misc.h"
++#include "linux/dma-mapping.h"
+ #include "os-interface.h"
+ #include "nv-linux.h"
+ #include "nv-p2p.h"
+@@ -2742,7 +2743,7 @@ nv_set_dma_address_size(
+     if (!nvl->tce_bypass_enabled)
+     {
+         NvU64 new_mask = (((NvU64)1) << phys_addr_bits) - 1;
+-        pci_set_dma_mask(nvl->dev, new_mask);
++        dma_set_mask(&nvl->dev->dev, new_mask);
+     }
+ }
+ 
+@@ -4502,7 +4503,7 @@ NvU64 NV_API_CALL nv_get_dma_start_address(
+      * as the starting address for all DMA mappings.
+      */
+     saved_dma_mask = dev->dma_mask;
+-    if (pci_set_dma_mask(dev, DMA_BIT_MASK(64)) != 0)
++    if (dma_set_mask(&dev->dev, DMA_BIT_MASK(64)) != 0)
+     {
+         goto done;
+     }
+@@ -4510,7 +4511,7 @@ NvU64 NV_API_CALL nv_get_dma_start_address(
+     dma_addr = pci_map_single(dev, NULL, 1, DMA_BIDIRECTIONAL);
+     if (pci_dma_mapping_error(dev, dma_addr))
+     {
+-        pci_set_dma_mask(dev, saved_dma_mask);
++        dma_set_mask(&dev->dev, saved_dma_mask);
+         goto done;
+     }
+ 
+@@ -4546,7 +4547,7 @@ NvU64 NV_API_CALL nv_get_dma_start_address(
+          */
+         nv_printf(NV_DBG_WARNINGS,
+             "NVRM: DMA window limited by platform\n");
+-        pci_set_dma_mask(dev, saved_dma_mask);
++        dma_set_mask(&dev->dev, saved_dma_mask);
+         goto done;
+     }
+     else if ((dma_addr & saved_dma_mask) != 0)
+@@ -4565,7 +4566,7 @@ NvU64 NV_API_CALL nv_get_dma_start_address(
+              */
+             nv_printf(NV_DBG_WARNINGS,
+                 "NVRM: DMA window limited by memory size\n");
+-            pci_set_dma_mask(dev, saved_dma_mask);
++            dma_set_mask(&dev->dev, saved_dma_mask);
+             goto done;
+         }
+     }
